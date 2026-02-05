@@ -4,7 +4,8 @@ import redis
 import asyncio
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
-import google.genai as genai
+# ИСПОЛЬЗУЕМ СТАРУЮ, НО РАБОЧУЮ ВЕРСИЮ БИБЛИОТЕКИ
+import google.generativeai as genai
 
 # --- 1. Конфигурация ---
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
@@ -19,11 +20,10 @@ except Exception as e:
     redis_client = None
     print(f"Не удалось подключиться к Redis: {e}")
 
-# --- Настройка Gemini с ПРАВИЛЬНЫМ именем модели ---
+# --- Настройка Gemini с правильным синтаксисом и правильным именем ---
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    # Используем имя из списка, который мы получили
-    model = genai.GenerativeModel("models/gemini-pro-latest") 
+    model = genai.GenerativeModel("models/gemini-pro-latest")
     print("Успешно настроена модель Gemini: models/gemini-pro-latest")
 except Exception as e:
     model = None
@@ -45,11 +45,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
 
     if not redis_client or not model or not application:
-        error_message = "Критическая ошибка конфигурации. "
-        if not redis_client: error_message += "Нет подключения к базе. "
-        if not model: error_message += "Нет подключения к AI. "
-        if not application: error_message += "Ошибка приложения Telegram. "
-        await update.message.reply_text(error_message)
+        await update.message.reply_text("Критическая ошибка конфигурации.")
         return
 
     try:
