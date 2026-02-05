@@ -23,7 +23,7 @@ except Exception as e:
 # --- Настройка Gemini с правильным синтаксисом и правильным именем ---
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("models/gemini-pro-latest")
+    model = genai.GenerativeModel("models/gemini-flash-latest")
     print("Успешно настроена модель Gemini: models/gemini-pro-latest")
 except Exception as e:
     model = None
