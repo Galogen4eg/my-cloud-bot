@@ -24,7 +24,7 @@ except Exception as e:
 try:
     genai.configure(api_key=GEMINI_API_KEY)
     # Используем модель, которая точно есть в вашем списке
-    model = genai.GenerativeModel("models/gemini-pro-latest")
+    model = genai.GenerativeModel("models/gemini-flash-latest")
     print("Успешно настроена модель Gemini: models/gemini-pro-latest")
 except Exception as e:
     model = None
