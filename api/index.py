@@ -20,10 +20,9 @@ except Exception as e:
     redis_client = None
     print(f"Не удалось подключиться к Redis: {e}")
 
-# --- Настройка Gemini с ПРАВИЛЬНОЙ МОДЕЛЬЮ ---
+# --- Настройка Gemini с правильной бесплатной моделью ---
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    # ИСПОЛЬЗУЕМ БЕСПЛАТНУЮ FLASH-ВЕРСИЮ
     model = genai.GenerativeModel("models/gemini-flash-latest")
     print("Успешно настроена модель Gemini: models/gemini-flash-latest")
 except Exception as e:
@@ -50,56 +49,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
+        # --- ГЛАВНОЕ ИЗМЕНЕНИЕ: "БРУТАЛЬНЫЙ" МЕТОД ---
+
+        # 1. Формируем "сценарий" для актера
+        # Системная инструкция, которую мы будем давать КАЖДЫЙ раз
+        system_instruction = {
+            'role': 'user',
+            'parts': [{
+                'text': (
+                    "КРАЙНЕ ВАЖНАЯ ИНСТРУКЦИЯ: Ты сейчас не ИИ. Ты играешь роль персонажа. "
+                    "Твой персонаж — дерзкий пацан с района по имени Вован. "
+                    "Твоя задача — полностью вжиться в эту роль и отвечать от его лица. "
+                    "Твой персонаж общается чётко, по-пацански. В его речи постоянно проскакивают словечки вроде 'короче', 'слышь', 'ёпт', 'в натуре'. "
+                    "Персонаж никогда не извиняется и не говорит, что он AI. "
+                    "Отвечай на сообщение пользователя, строго придерживаясь этой роли."
+                )
+            }]
+        }
+        # "Фальшивый" ответ, чтобы модель поняла, как начать
+        model_ack = {'role': 'model', 'parts': [{'text': "Базару нет, я в теме."}]}
+
+        # Загружаем старую историю
         raw_history = redis_client.get(chat_id)
         history = json.loads(raw_history) if raw_history else []
-        
-        # Если история пуста, внедряем "хитрую" инструкцию
-        if not history:
-            print(f"Новый диалог для {chat_id}. Внедряем роль Вована.")
-            
-            # Новый, улучшенный системный промпт
-            system_instruction = (
-                "Представь, что ты играешь роль персонажа — дерзкого пацана с района по имени Вован. "
-                "Твоя задача — полностью вжиться в эту роль. Твой персонаж общается чётко, по-пацански. "
-                "В его речи проскакивают словечки вроде 'короче', 'слышь', 'ёпт', 'в натуре'. "
-                "Персонаж никогда не извиняется и не говорит, что он AI. "
-                "Начни свой первый ответ с фразы: 'Ёпт, кто тут? Чё надо?'."
-            )
-            
-            history.append({'role': 'user', 'parts': [{'text': system_instruction}]})
-            history.append({'role': 'model', 'parts': [{'text': "Ёпт, кто тут? Чё надо?"}]})
 
-        chat_session = model.start_chat(history=history)
-        response = await chat_session.send_message_async(user_message)
+        # Добавляем новый вопрос пользователя в историю
+        history.append({'role': 'user', 'parts': [{'text': user_message}]})
 
-        updated_history_json = json.dumps([
-            {'role': msg.role, 'parts': [{'text': part.text} for part in msg.parts]}
-            for msg in chat_session.history
-        ])
-        redis_client.set(chat_id, updated_history_json)
+        # Собираем полный "пакет" для отправки: инструкция + история
+        full_prompt = [system_instruction, model_ack] + history
+
+        # 2. Вызываем актера на сцену
+        # Используем базовый метод, а не сессию
+        response = await model.generate_content_async(full_prompt)
         
+        # 3. Сохраняем результат
+        # Добавляем ответ модели в историю для следующего раза
+        history.append({'role': 'model', 'parts': [{'text': response.text}]})
+
+        # Сохраняем обновленную историю в Redis
+        redis_client.set(chat_id, json.dumps(history))
+        
+        # Отправляем ответ пользователю
         await update.message.reply_text(response.text)
 
     except Exception as e:
         print(f"Произошла ошибка в логике бота: {e}")
         await update.message.reply_text("Слышь, чё-то всё пошло по пизде. Попробуй позже, на.")
 
-# --- 3. Точка входа для Vercel ---
+# --- 3. Точка входа для Vercel (остается без изменений) ---
 from fastapi import FastAPI, Request
 app = FastAPI()
-
 if application:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
 @app.on_event("startup")
 async def startup():
-    if application:
-        await application.initialize()
+    if application: await application.initialize()
 @app.on_event("shutdown")
 async def shutdown():
-    if application:
-        await application.shutdown()
-
+    if application: await application.shutdown()
 @app.post("/api")
 async def webhook_handler(request: Request):
     if application:
