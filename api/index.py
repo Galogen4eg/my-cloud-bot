@@ -30,7 +30,7 @@ except Exception as e:
 
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-1.0-pro')
     print("Успешно настроена модель Gemini.")
 except Exception as e:
     model = None
