@@ -3,7 +3,7 @@ import json
 import redis
 import asyncio
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes # <-- Добавлен CommandHandler
 # Используем старую, но рабочую версию библиотеки
 import google.generativeai as genai
 
@@ -38,6 +38,25 @@ except Exception as e:
     print(f"Не удалось создать приложение Telegram: {e}")
 
 # --- 2. Логика бота ---
+
+# --- НОВАЯ ФУНКЦИЯ ДЛЯ КОМАНДЫ /restart ---
+async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Очищает историю диалога для текущего чата."""
+    chat_id = str(update.message.chat_id)
+    
+    if redis_client:
+        try:
+            # Используем DEL для удаления ключа (записи о диалоге)
+            redis_client.delete(chat_id)
+            print(f"История для чата {chat_id} была очищена по команде /restart.")
+            await update.message.reply_text("Базару нет, начинаем с чистого листа. Чё хотел?")
+        except Exception as e:
+            print(f"Ошибка при очистке истории для {chat_id}: {e}")
+            await update.message.reply_text("Слышь, даже память не могу почистить, всё по пизде пошло.")
+    else:
+        await update.message.reply_text("Не могу подключиться к базе, чтобы всё забыть.")
+
+# --- ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     user_message = update.message.text
@@ -49,10 +68,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # --- ГЛАВНОЕ ИЗМЕНЕНИЕ: "БРУТАЛЬНЫЙ" МЕТОД ---
-
-        # 1. Формируем "сценарий" для актера
-        # Системная инструкция, которую мы будем давать КАЖДЫЙ раз
+        # "Брутальный" метод с постоянным внедрением личности
         system_instruction = {
             'role': 'user',
             'parts': [{
@@ -66,48 +82,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             }]
         }
-        # "Фальшивый" ответ, чтобы модель поняла, как начать
         model_ack = {'role': 'model', 'parts': [{'text': "Базару нет, я в теме."}]}
 
-        # Загружаем старую историю
         raw_history = redis_client.get(chat_id)
         history = json.loads(raw_history) if raw_history else []
 
-        # Добавляем новый вопрос пользователя в историю
         history.append({'role': 'user', 'parts': [{'text': user_message}]})
 
-        # Собираем полный "пакет" для отправки: инструкция + история
         full_prompt = [system_instruction, model_ack] + history
 
-        # 2. Вызываем актера на сцену
-        # Используем базовый метод, а не сессию
         response = await model.generate_content_async(full_prompt)
         
-        # 3. Сохраняем результат
-        # Добавляем ответ модели в историю для следующего раза
         history.append({'role': 'model', 'parts': [{'text': response.text}]})
 
-        # Сохраняем обновленную историю в Redis
         redis_client.set(chat_id, json.dumps(history))
         
-        # Отправляем ответ пользователю
         await update.message.reply_text(response.text)
 
     except Exception as e:
         print(f"Произошла ошибка в логике бота: {e}")
         await update.message.reply_text("Слышь, чё-то всё пошло по пизде. Попробуй позже, на.")
 
-# --- 3. Точка входа для Vercel (остается без изменений) ---
+# --- 3. Точка входа для Vercel ---
 from fastapi import FastAPI, Request
 app = FastAPI()
+
 if application:
+    # Регистрируем обработчик для обычных текстовых сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # Регистрируем нашу новую команду /restart
+    application.add_handler(CommandHandler("restart", restart_command))
+
 @app.on_event("startup")
 async def startup():
-    if application: await application.initialize()
+    if application:
+        await application.initialize()
+
 @app.on_event("shutdown")
 async def shutdown():
-    if application: await application.shutdown()
+    if application:
+        await application.shutdown()
+
 @app.post("/api")
 async def webhook_handler(request: Request):
     if application:
