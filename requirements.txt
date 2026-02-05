@@ -1,5 +1,5 @@
 python-telegram-bot
-google-generativeai
+google-genai
 vercel-kv
 fastapi
 uvicorn
