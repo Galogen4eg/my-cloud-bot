@@ -25,7 +25,7 @@ try:
     # Создаем клиент Groq
     groq_client = Groq(api_key=GROQ_API_KEY)
     # Выбираем модель. Llama3-8b-8192 - быстрая и умная
-    MODEL_NAME = "llama3-8b-8192"
+    MODEL_NAME = "llama3-70b-8192"
     print(f"Успешно настроен клиент Groq с моделью: {MODEL_NAME}")
 except Exception as e:
     groq_client = None
