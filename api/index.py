@@ -1,35 +1,44 @@
 import os
 import json
 import redis
+import asyncio # <-- Добавляем новую библиотеку
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
-import google.generativeai as genai # <-- ВЕРНУЛИ СТАРЫЙ, НАДЕЖНЫЙ ИМПОРТ
+import google.generativeai as genai
 
 # --- 1. Конфигурация ---
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 REDIS_URL = os.environ.get('REDIS_URL')
 
-# Создаем Redis клиент
+# --- ГЛАВНОЕ ИЗМЕНЕНИЕ: Создаем приложение один раз ---
+try:
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    print("Приложение Telegram успешно создано.")
+except Exception as e:
+    application = None
+    print(f"Не удалось создать приложение Telegram: {e}")
+# ----------------------------------------------------
+
+# --- Остальная конфигурация ---
 try:
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
     print("Успешно подключено к Redis.")
 except Exception as e:
-    print(f"Не удалось подключиться к Redis: {e}")
     redis_client = None
+    print(f"Не удалось подключиться к Redis: {e}")
 
-# --- ВЕРНУЛИ СТАРЫЙ, НАДЕЖНЫЙ СПОСОБ НАСТРОЙКИ GEMINI ---
 try:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel('gemini-pro')
     print("Успешно настроена модель Gemini.")
 except Exception as e:
-    print(f"Не удалось настроить Gemini: {e}")
     model = None
-# ----------------------------------------------------
+    print(f"Не удалось настроить Gemini: {e}")
 
-# --- 2. Логика бота ---
+# --- 2. Логика бота (не меняется) ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ... (весь ваш код handle_message остается здесь без изменений)
     chat_id = str(update.message.chat_id)
     user_message = update.message.text
     
@@ -61,15 +70,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Произошла ошибка в логике бота: {e}")
         await update.message.reply_text("Ой, что-то сломалось. Попробуйте еще раз.")
 
-# --- 3. Точка входа для Vercel ---
+
+# --- 3. Точка входа для Vercel (полностью переписана) ---
 from fastapi import FastAPI, Request
 app = FastAPI()
 
+# Регистрируем обработчик сообщений
+if application:
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+@app.on_event("startup")
+async def startup():
+    if application:
+        await application.initialize()
+
+@app.on_event("shutdown")
+async def shutdown():
+    if application:
+        await application.shutdown()
+
 @app.post("/api")
 async def webhook_handler(request: Request):
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    update = Update.de_json(await request.json(), application.bot)
-    await application.process_update(update)
+    if application:
+        await application.process_update(
+            Update.de_json(await request.json(), application.bot)
+        )
     return {"status": "ok"}
