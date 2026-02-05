@@ -1,51 +1,54 @@
 import os
 import json
-import redis # <-- ИСПОЛЬЗУЕМ НОВУЮ, НАДЕЖНУЮ БИБЛИОТЕКУ
+import redis
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
-import google.genai as genai
+import google.generativeai as genai # <-- ВЕРНУЛИ СТАРЫЙ, НАДЕЖНЫЙ ИМПОРТ
 
 # --- 1. Конфигурация ---
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 REDIS_URL = os.environ.get('REDIS_URL')
 
-# --- ГЛАВНОЕ ИЗМЕНЕНИЕ ---
-# Создаем Redis клиент напрямую из URL.
-# decode_responses=True - важная настройка, чтобы получать строки, а не байты.
+# Создаем Redis клиент
 try:
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
     print("Успешно подключено к Redis.")
 except Exception as e:
     print(f"Не удалось подключиться к Redis: {e}")
     redis_client = None
-# -------------------------
 
-# Настраиваем Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-pro')
+# --- ВЕРНУЛИ СТАРЫЙ, НАДЕЖНЫЙ СПОСОБ НАСТРОЙКИ GEMINI ---
+try:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-pro')
+    print("Успешно настроена модель Gemini.")
+except Exception as e:
+    print(f"Не удалось настроить Gemini: {e}")
+    model = None
+# ----------------------------------------------------
 
-# --- 2. Логика бота, адаптированная под Redis ---
+# --- 2. Логика бота ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     user_message = update.message.text
     
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
 
-    if not redis_client:
-        await update.message.reply_text("Ошибка: нет подключения к базе данных памяти.")
+    if not redis_client or not model:
+        error_message = "Ошибка: "
+        if not redis_client: error_message += "нет подключения к базе данных. "
+        if not model: error_message += "не удалось настроить AI модель."
+        await update.message.reply_text(error_message)
         return
 
     try:
-        # Читаем историю из Redis
         raw_history = redis_client.get(chat_id)
         history = json.loads(raw_history) if raw_history else []
-        print(f"Загружена история для {chat_id}, {len(history)} сообщений.")
-
+        
         chat_session = model.start_chat(history=history)
         response = await chat_session.send_message_async(user_message)
 
-        # Сохраняем историю в Redis
         updated_history_json = json.dumps([
             {'role': msg.role, 'parts': [{'text': part.text} for part in msg.parts]}
             for msg in chat_session.history
@@ -58,7 +61,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Произошла ошибка в логике бота: {e}")
         await update.message.reply_text("Ой, что-то сломалось. Попробуйте еще раз.")
 
-# --- 3. Точка входа для Vercel (не меняется) ---
+# --- 3. Точка входа для Vercel ---
 from fastapi import FastAPI, Request
 app = FastAPI()
 
