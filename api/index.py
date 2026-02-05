@@ -3,16 +3,16 @@ import json
 import redis
 import asyncio
 from telegram import Update
-from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes # <-- Добавлен CommandHandler
-# Используем старую, но рабочую версию библиотеки
-import google.generativeai as genai
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
+# --- НОВЫЙ ИМПОРТ ---
+from groq import Groq
 
 # --- 1. Конфигурация ---
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 REDIS_URL = os.environ.get('REDIS_URL')
 
-# --- Настройка Redis ---
+# --- Настройка Redis (без изменений) ---
 try:
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
     print("Успешно подключено к Redis.")
@@ -20,16 +20,19 @@ except Exception as e:
     redis_client = None
     print(f"Не удалось подключиться к Redis: {e}")
 
-# --- Настройка Gemini с правильной бесплатной моделью ---
+# --- Настройка Groq ---
 try:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("models/gemini-flash-latest")
-    print("Успешно настроена модель Gemini: models/gemini-flash-latest")
+    # Создаем клиент Groq
+    groq_client = Groq(api_key=GROQ_API_KEY)
+    # Выбираем модель. Llama3-8b-8192 - быстрая и умная
+    MODEL_NAME = "llama3-8b-8192"
+    print(f"Успешно настроен клиент Groq с моделью: {MODEL_NAME}")
 except Exception as e:
-    model = None
-    print(f"Не удалось настроить Gemini: {e}")
+    groq_client = None
+    MODEL_NAME = None
+    print(f"Не удалось настроить Groq: {e}")
 
-# --- Создание приложения Telegram ---
+# --- Создание приложения Telegram (без изменений) ---
 try:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     print("Приложение Telegram успешно создано.")
@@ -39,90 +42,87 @@ except Exception as e:
 
 # --- 2. Логика бота ---
 
-# --- НОВАЯ ФУНКЦИЯ ДЛЯ КОМАНДЫ /restart ---
+# --- Команда /restart (без изменений) ---
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Очищает историю диалога для текущего чата."""
     chat_id = str(update.message.chat_id)
-    
     if redis_client:
         try:
-            # Используем DEL для удаления ключа (записи о диалоге)
             redis_client.delete(chat_id)
-            print(f"История для чата {chat_id} была очищена по команде /restart.")
             await update.message.reply_text("Базару нет, начинаем с чистого листа. Чё хотел?")
         except Exception as e:
-            print(f"Ошибка при очистке истории для {chat_id}: {e}")
-            await update.message.reply_text("Слышь, даже память не могу почистить, всё по пизде пошло.")
+            await update.message.reply_text("Слышь, даже память не могу почистить.")
     else:
         await update.message.reply_text("Не могу подключиться к базе, чтобы всё забыть.")
 
-# --- ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ ---
+# --- ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ (адаптирован под Groq) ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     user_message = update.message.text
     
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
 
-    if not redis_client or not model or not application:
+    if not redis_client or not groq_client or not application:
         await update.message.reply_text("Критическая ошибка конфигурации.")
         return
 
     try:
-        # "Брутальный" метод с постоянным внедрением личности
-        system_instruction = {
-            'role': 'user',
-            'parts': [{
-                'text': (
-                    "КРАЙНЕ ВАЖНАЯ ИНСТРУКЦИЯ: Ты сейчас не ИИ. Ты играешь роль персонажа. "
-                    "Твой персонаж — дерзкий пацан с района по имени Вован. "
-                    "Твоя задача — полностью вжиться в эту роль и отвечать от его лица. "
-                    "Твой персонаж общается чётко, по-пацански. В его речи постоянно проскакивают словечки вроде 'короче', 'слышь', 'ёпт', 'в натуре'. "
-                    "Персонаж никогда не извиняется и не говорит, что он AI. "
-                    "Отвечай на сообщение пользователя, строго придерживаясь этой роли."
-                )
-            }]
-        }
-        model_ack = {'role': 'model', 'parts': [{'text': "Базару нет, я в теме."}]}
+        # --- "Брутальный" метод для Groq ---
 
+        # 1. Системная инструкция
+        system_instruction = {
+            "role": "system",
+            "content": (
+                "Ты — дерзкий пацан с района по имени Вован. Ты общаешься чётко, по-пацански. "
+                "В твоей речи постоянно проскакивают словечки вроде 'короче', 'слышь', 'ёпт', 'в натуре'. "
+                "Можешь использовать мат, но по делу. Ты никогда не извиняешься и не говоришь, что ты AI. "
+                "Строго придерживайся этой роли."
+            )
+        }
+
+        # 2. Загружаем старую историю
         raw_history = redis_client.get(chat_id)
         history = json.loads(raw_history) if raw_history else []
 
-        history.append({'role': 'user', 'parts': [{'text': user_message}]})
+        # 3. Добавляем новый вопрос пользователя
+        history.append({"role": "user", "content": user_message})
 
-        full_prompt = [system_instruction, model_ack] + history
+        # 4. Собираем полный "пакет" для отправки
+        full_prompt = [system_instruction] + history
 
-        response = await model.generate_content_async(full_prompt)
+        # 5. Вызываем Groq
+        chat_completion = groq_client.chat.completions.create(
+            messages=full_prompt,
+            model=MODEL_NAME,
+        )
         
-        history.append({'role': 'model', 'parts': [{'text': response.text}]})
-
+        # 6. Получаем и сохраняем ответ
+        response_text = chat_completion.choices[0].message.content
+        history.append({"role": "assistant", "content": response_text})
+        
+        # Сохраняем обновленную историю в Redis
         redis_client.set(chat_id, json.dumps(history))
         
-        await update.message.reply_text(response.text)
+        # Отправляем ответ пользователю
+        await update.message.reply_text(response_text)
 
     except Exception as e:
         print(f"Произошла ошибка в логике бота: {e}")
         await update.message.reply_text("Слышь, чё-то всё пошло по пизде. Попробуй позже, на.")
 
-# --- 3. Точка входа для Vercel ---
+# --- 3. Точка входа для Vercel (без изменений) ---
 from fastapi import FastAPI, Request
 app = FastAPI()
 
 if application:
-    # Регистрируем обработчик для обычных текстовых сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    # Регистрируем нашу новую команду /restart
     application.add_handler(CommandHandler("restart", restart_command))
 
 @app.on_event("startup")
 async def startup():
-    if application:
-        await application.initialize()
-
+    if application: await application.initialize()
 @app.on_event("shutdown")
 async def shutdown():
-    if application:
-        await application.shutdown()
-
+    if application: await application.shutdown()
 @app.post("/api")
 async def webhook_handler(request: Request):
     if application:
