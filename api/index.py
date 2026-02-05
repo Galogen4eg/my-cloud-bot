@@ -1,18 +1,22 @@
 import os
 import json
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import google.generativeai as genai
-from vercel_kv import kv
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
+import google.genai as genai  # <-- ИЗМЕНЕНИЕ 1
+from vercel_kv.redis import VercelKV  # <-- ИЗМЕНЕНИЕ 2
 
 # --- 1. Конфигурация ---
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 
+# Создаем объект для работы с KV
+kv_client = VercelKV()  # <-- ИЗМЕНЕНИЕ 3
+
+# Настраиваем Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-pro')
 
-# --- 2. Логика бота с использованием Vercel KV ---
+# --- 2. Логика бота с обновленным кодом ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     user_message = update.message.text
@@ -20,18 +24,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
 
     try:
-        raw_history = kv.get(chat_id)
+        # Загружаем историю, используя новый kv_client
+        raw_history = kv_client.get(chat_id)  # <-- ИЗМЕНЕНИЕ 4
         history = json.loads(raw_history) if raw_history else []
         print(f"Загружена история для {chat_id}, {len(history)} сообщений.")
 
         chat_session = model.start_chat(history=history)
         response = await chat_session.send_message_async(user_message)
 
+        # Сохраняем историю, используя новый kv_client
         updated_history_json = json.dumps([
-            {'role': msg.role, 'parts': [part.text for part in msg.parts]}
+            {'role': msg.role, 'parts': [{'text': part.text} for part in msg.parts]}
             for msg in chat_session.history
         ])
-        kv.set(chat_id, updated_history_json)
+        kv_client.set(chat_id, updated_history_json)  # <-- ИЗМЕНЕНИЕ 5
         
         await update.message.reply_text(response.text)
 
