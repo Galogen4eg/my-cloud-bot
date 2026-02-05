@@ -11,7 +11,7 @@ GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 REDIS_URL = os.environ.get('REDIS_URL')
 
-# --- Настройка Redis (без изменений) ---
+# --- Настройка Redis ---
 try:
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
     print("Успешно подключено к Redis.")
@@ -22,7 +22,6 @@ except Exception as e:
 # --- Настройка Groq с ПРАВИЛЬНЫМ именем модели ---
 try:
     groq_client = Groq(api_key=GROQ_API_KEY)
-    # ВЫБИРАЕМ АКТУАЛЬНУЮ МОДЕЛЬ ИЗ СПИСКА
     MODEL_NAME = "llama-3.1-8b-instant"
     print(f"Успешно настроен клиент Groq с моделью: {MODEL_NAME}")
 except Exception as e:
@@ -30,7 +29,7 @@ except Exception as e:
     MODEL_NAME = None
     print(f"Не удалось настроить Groq: {e}")
 
-# --- Создание приложения Telegram (без изменений) ---
+# --- Создание приложения Telegram ---
 try:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     print("Приложение Telegram успешно создано.")
@@ -40,7 +39,7 @@ except Exception as e:
 
 # --- 2. Логика бота ---
 
-# --- Команда /restart (без изменений) ---
+# --- Команда /restart ---
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     if redis_client:
@@ -97,7 +96,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Произошла ошибка в логике бота: {e}")
         await update.message.reply_text("Слышь, чё-то всё пошло по пизде. Попробуй позже, на.")
 
-# --- 3. Точка входа для Vercel (без изменений) ---
+# --- 3. Точка входа для Vercel ---
 from fastapi import FastAPI, Request
 app = FastAPI()
 
@@ -107,14 +106,18 @@ if application:
 
 @app.on_event("startup")
 async def startup():
-    if application: await application.initialize()
+    if application:
+        await application.initialize()
+
 @app.on_event("shutdown")
 async def shutdown():
-    if application: await application.shutdown()
+    if application:
+        await application.shutdown()
+
 @app.post("/api")
 async def webhook_handler(request: Request):
     if application:
         await application.process_update(
             Update.de_json(await request.json(), application.bot)
         )
-    return {"sta
+    return {"status": "ok"}
